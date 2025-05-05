@@ -3,3 +3,4 @@ Flask-Session
 pandas
 openpyxl
 prophet
+gunicorn
