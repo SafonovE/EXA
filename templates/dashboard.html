@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Дашборд Инцидентов</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root {
+      --primary: #007bff;
+      --bg: #f9f9fb;
+      --text: #212529;
+      --card-bg: #ffffff;
+      --border: #dee2e6;
+      --accent: #f0f4ff;
+    }
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      margin: 0;
+    }
+    header {
+      padding: 20px;
+      background-color: var(--primary);
+      color: white;
+    }
+    header h1 {
+      margin: 0;
+      font-size: 26px;
+    }
+    main {
+      padding: 30px;
+    }
+    nav {
+      margin: 20px 0;
+    }
+    nav a {
+      text-decoration: none;
+      padding: 10px 16px;
+      margin-right: 8px;
+      border-radius: 8px;
+      background-color: #e0e0e0;
+      color: #212529;
+      font-weight: 500;
+    }
+    nav a.active {
+      background-color: var(--primary);
+      color: white;
+    }
+    form {
+      margin-bottom: 20px;
+    }
+    input[type="file"], button, input[type="date"] {
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background-color: white;
+      color: var(--text);
+      margin-right: 10px;
+    }
+    button {
+      background-color: var(--primary);
+      color: white;
+      cursor: pointer;
+    }
+    button:hover {
+      background-color: #0056b3;
+    }
+    .card {
+      background-color: var(--card-bg);
+      padding: 20px;
+      margin-bottom: 20px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+    }
+    .flex {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 20px;
+    }
+    .card.half { flex: 1 1 45%; }
+    .card.full { flex: 1 1 100%; }
+    canvas {
+      background-color: var(--accent);
+      border-radius: 8px;
+      width: 100% !important;
+      max-height: 350px;
+    }
+    .badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 8px;
+    }
+    .badge {
+      background: #eef2ff;
+      color: #333;
+      border-radius: 12px;
+      padding: 4px 10px;
+      font-size: 13px;
+      font-weight: 500;
+    }
+    .jira-link {
+      background: #e0f3ff;
+      color: #007bff;
+      text-decoration: none;
+      border-radius: 8px;
+      padding: 5px 10px;
+      margin: 3px 3px 3px 0;
+      display: inline-block;
+      font-weight: 500;
+    }
+    .jira-link:hover {
+      background: #cce7ff;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>📊 Дашборд Инцидентов</h1>
+  </header>
+
+  <main>
+    <form method="post" enctype="multipart/form-data">
+      <input type="file" name="file" required>
+      <button type="submit">📁 Загрузить</button>
+    </form>
+
+    <nav>
+      {% for key, label in periods.items() %}
+        <a href="/?period={{ key }}" class="{% if selected == key %}active{% endif %}">{{ label }}</a>
+      {% endfor %}
+    </nav>
+
+    {% if selected == 'custom' %}
+    <form method="get">
+      <input type="hidden" name="period" value="custom">
+      <label>С:</label>
+      <input type="date" name="from" value="{{ from_date }}">
+      <label>По:</label>
+      <input type="date" name="to" value="{{ to_date }}">
+      <button type="submit">Показать</button>
+    </form>
+    {% endif %}
+
+    {% if data %}
+    <div class="flex">
+      <div class="card full">
+        <h3>📈 График инцидентов</h3>
+        <canvas id="incidentChart"></canvas>
+      </div>
+
+      <div class="card half">
+        <h3>🧠 Ключевые инсайты</h3>
+        <ul>
+          {% for item in data.insights %}<li>{{ item }}</li>{% endfor %}
+          {% if not data.insights %}<i>Нет инсайтов</i>{% endif %}
+        </ul>
+      </div>
+
+      <div class="card half">
+        <h3>🔮 Прогноз</h3>
+        <p>{{ data.forecast or 'Прогноз недоступен' }}</p>
+      </div>
+
+      <div class="card half">
+        <h3>📌 Причины</h3>
+        <ul>
+          {% for k, v in data.reasons.items() %}<li>{{ k }} — {{ v }}</li>{% endfor %}
+          {% if not data.reasons %}<i>Нет данных по причинам</i>{% endif %}
+        </ul>
+      </div>
+
+      <div class="card half">
+        <h3>👤 Виновники</h3>
+        <ul>
+          {% for k, v in data.blame.items() %}
+            <li style="margin-bottom: 10px;">
+              <strong>{{ k | capitalize }} ({{ v | length }})</strong><br>
+              <div class="badges">
+                {% for inc in v %}
+                  <span class="badge">{{ inc }}</span>
+                {% endfor %}
+              </div>
+            </li>
+          {% endfor %}
+          {% if not data.blame %}<i>Нет данных о виновниках</i>{% endif %}
+        </ul>
+      </div>
+
+      <div class="card half">
+        <h3>📄 Инциденты</h3>
+        <div class="badges">
+          {% for item in data.incidents %}
+            <span class="badge">{{ item }}</span>
+          {% endfor %}
+          {% if not data.incidents %}<i>Нет данных по инцидентам</i>{% endif %}
+        </div>
+      </div>
+
+      <div class="card half">
+        <h3>🧩 Jira-задачи</h3>
+        <div class="badges">
+          {% for link in data.jira_links %}
+            <a class="jira-link" href="{{ link }}" target="_blank">{{ link.split('/')[-1] }}</a>
+          {% endfor %}
+          {% if not data.jira_links %}<i>Нет Jira-ссылок</i>{% endif %}
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const labels = {{ data.monthly.labels | tojson }};
+      const points = {{ data.monthly.points | tojson }};
+      const forecastLabels = labels.slice();
+      const forecastPoints = points.slice();
+
+      {% if data.forecast and "Прогноз на" in data.forecast %}
+        {% set parts = data.forecast.split("—") %}
+        {% if parts|length > 1 %}
+          {% set forecast_date = parts[0].split("на")[-1].strip() %}
+          {% set forecast_value = parts[1].split("инцидентов")[0].strip() %}
+          forecastLabels.push("{{ forecast_date }}");
+          forecastPoints.push(parseInt("{{ forecast_value }}"));
+        {% endif %}
+      {% endif %}
+
+      new Chart(document.getElementById('incidentChart'), {
+        type: 'line',
+        data: {
+          labels: forecastLabels,
+          datasets: [
+            {
+              label: 'Инциденты за период',
+              data: points,
+              borderColor: '#007bff',
+              backgroundColor: 'rgba(0,123,255,0.1)',
+              fill: true,
+              tension: 0.4,
+              pointRadius: 4
+            },
+            {
+              label: 'Прогноз',
+              data: forecastPoints,
+              borderColor: 'rgba(255,99,132,1)',
+              backgroundColor: 'rgba(255,99,132,0.2)',
+              fill: false,
+              borderDash: [5, 5],
+              pointStyle: 'triangle',
+              pointRadius: 5
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          scales: {
+            y: {
+              beginAtZero: true,
+              ticks: { color: '#6c757d' },
+              grid: { color: '#e9ecef' }
+            },
+            x: {
+              ticks: { color: '#6c757d' },
+              grid: { color: '#e9ecef' }
+            }
+          },
+          plugins: {
+            legend: {
+              labels: { color: '#495057' }
+            }
+          }
+        }
+      });
+    </script>
+    {% else %}
+      <p><strong style="color: #dc3545;">⚠️ Сначала загрузите Excel-файл.</strong></p>
+    {% endif %}
+  </main>
+</body>
+</html>
