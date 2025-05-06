@@ -2,279 +2,607 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
-  <title>Дашборд Инцидентов</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>📊 Интерактивный Дашборд Инцидентов</title>
+
+  <!-- Chart.js для отрисовки графиков -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
+    /* =====================================================
+       Цветовая палитра Sega-пастель
+    ===================================================== */
     :root {
-      --primary: #007bff;
-      --bg: #f9f9fb;
-      --text: #212529;
-      --card-bg: #ffffff;
-      --border: #dee2e6;
-      --accent: #f0f4ff;
+      --primary:           #0050A0;        /* основной синий */
+      --accent:            #00A1E9;        /* голубой ховер */
+      --bg:                #F0F8FF;        /* фон страницы */
+      --card-bg:           #FFFFFF;        /* фон карточек */
+      --text:              #333333;        /* основной текст */
+      --border:            #DDDDDD;        /* рамки */
+      --badge-bg:          #0050A0;        /* фон бейджей */
+      --badge-text:        #FFFFFF;        /* текст бейджей */
+      --highlight-bg:      rgba(255,255,0,0.3); /* полупрозрачный жёлтый */
+      --highlight-outline: #FF0000;        /* красная обводка */
+    }
+
+    /* --------------------------------------------
+       Сброс отступов/паддингов, базовая типографика
+    -------------------------------------------- */
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0; padding: 0;
     }
     body {
-      font-family: 'Segoe UI', sans-serif;
-      background-color: var(--bg);
+      background: var(--bg);
       color: var(--text);
-      margin: 0;
+      font-family: 'Segoe UI', sans-serif;
+      line-height: 1.5;
     }
+
+    /* --------------------------
+       Шапка сайта
+    -------------------------- */
     header {
-      padding: 20px;
-      background-color: var(--primary);
+      background: var(--primary);
       color: white;
+      text-align: center;
+      padding: 20px;
+      font-size: 1.75rem;
+      font-weight: bold;
     }
-    header h1 {
-      margin: 0;
-      font-size: 26px;
-    }
+
+    /* --------------------------
+       Главный контейнер
+    -------------------------- */
     main {
-      padding: 30px;
+      max-width: 1200px;
+      margin: 20px auto;
+      padding: 0 20px;
     }
+
+    /* =================================================
+       Оверлей и тост для индикации загрузки
+    ================================================= */
+    #loader-overlay {
+      position: fixed; top:0; left:0; right:0; bottom:0;
+      background: rgba(0,0,0,0.6);
+      display: none; align-items:center; justify-content:center;
+      flex-direction:column; z-index:1000;
+      color:white; font-size:1.2rem; font-weight:bold;
+    }
+    #loader-overlay .spinner {
+      width:60px; height:60px;
+      border:8px solid rgba(255,255,255,0.3);
+      border-top-color:white;
+      border-radius:50%;
+      animation:spin 1s linear infinite;
+      margin-bottom:12px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    #upload-toast {
+      position:fixed; top:20px; left:50%;
+      transform:translateX(-50%);
+      padding:12px 24px;
+      background:var(--primary);
+      color:white;
+      border-radius:8px;
+      box-shadow:0 4px 12px rgba(0,0,0,0.2);
+      display:none; z-index:1100; font-weight:bold;
+      animation:slideDown 0.5s ease-out forwards;
+    }
+    @keyframes slideDown {
+      from { opacity:0; transform: translate(-50%,-50px); }
+      to   { opacity:1; transform: translate(-50%,0); }
+    }
+
+    /* --------------------------
+       Форма загрузки файла
+    -------------------------- */
+    .upload {
+      display:flex; gap:8px; margin-bottom:20px;
+    }
+    .upload input[type="file"] {
+      flex:1; padding:6px; border:1px solid var(--border);
+      border-radius:6px; background:var(--card-bg);
+    }
+    .upload button {
+      padding:8px 16px; background:var(--primary);
+      color:white; border:none; border-radius:6px;
+      cursor:pointer; font-weight:600;
+      transition:background 0.2s;
+    }
+    .upload button:hover {
+      background:var(--accent);
+    }
+
+    /* --------------------------
+       Навигация периодов
+    -------------------------- */
     nav {
-      margin: 20px 0;
+      display:flex; flex-wrap:wrap; gap:8px;
+      margin-bottom:20px;
     }
     nav a {
-      text-decoration: none;
-      padding: 10px 16px;
-      margin-right: 8px;
-      border-radius: 8px;
-      background-color: #e0e0e0;
-      color: #212529;
-      font-weight: 500;
+      background:var(--card-bg); color:var(--text);
+      padding:8px 16px; border:1px solid var(--border);
+      border-radius:6px; text-decoration:none;
+      font-weight:600; transition:background 0.2s, color 0.2s;
     }
-    nav a.active {
-      background-color: var(--primary);
-      color: white;
+    nav a:hover, nav a.active {
+      background:var(--primary); color:white;
+      border-color:var(--primary);
     }
-    form {
-      margin-bottom: 20px;
+
+    /* --------------------------
+       Свой период
+    -------------------------- */
+    .custom-period {
+      display:flex; flex-wrap:wrap; gap:12px;
+      align-items:center; margin-bottom:20px;
     }
-    input[type="file"], button, input[type="date"] {
-      padding: 10px 12px;
-      border-radius: 8px;
-      border: 1px solid var(--border);
-      background-color: white;
-      color: var(--text);
-      margin-right: 10px;
+    .custom-period label { font-weight:600; }
+    .custom-period input, .custom-period select {
+      padding:6px 8px; border:1px solid var(--border);
+      border-radius:6px; background:var(--card-bg);
     }
-    button {
-      background-color: var(--primary);
-      color: white;
-      cursor: pointer;
+    .custom-period button {
+      padding:6px 12px; background:var(--primary);
+      color:white; border:none; border-radius:6px;
+      cursor:pointer; transition:background 0.2s;
     }
-    button:hover {
-      background-color: #0056b3;
+    .custom-period button:hover {
+      background:var(--accent);
+    }
+
+    /* --------------------------
+       Сетка карточек
+    -------------------------- */
+    .flex {
+      display:flex; flex-wrap:wrap; gap:20px;
     }
     .card {
-      background-color: var(--card-bg);
-      padding: 20px;
-      margin-bottom: 20px;
-      border-radius: 12px;
-      border: 1px solid var(--border);
-      box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+      background:var(--card-bg);
+      border:1px solid var(--border);
+      border-radius:8px;
+      padding:20px;
+      flex:1 1 calc(50% - 20px);
+      box-shadow:0 2px 8px rgba(0,0,0,0.05);
     }
-    .flex {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 20px;
+    .card.full { flex:1 1 100%; }
+    .card h3 {
+      margin-bottom:12px;
+      color:var(--primary);
+      font-size:1.25rem;
+      font-weight:700;
     }
-    .card.half { flex: 1 1 45%; }
-    .card.full { flex: 1 1 100%; }
-    canvas {
-      background-color: var(--accent);
-      border-radius: 8px;
-      width: 100% !important;
-      max-height: 350px;
+
+    /* --------------------------
+       Аккордеоны
+    -------------------------- */
+    details { margin-top:10px; }
+    details summary {
+      background:var(--primary); color:white;
+      padding:6px 10px; font-size:0.95rem;
+      border-radius:6px; cursor:pointer;
+      font-weight:600; transition:background 0.2s;
+      display:flex; justify-content:space-between;
+      align-items:center;
     }
-    .badges {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-      margin-top: 8px;
+    details summary:hover {
+      background:var(--accent);
     }
-    .badge {
-      background: #eef2ff;
-      color: #333;
-      border-radius: 12px;
-      padding: 4px 10px;
-      font-size: 13px;
-      font-weight: 500;
+    details[open] summary {
+      background:var(--card-bg); color:var(--text);
+    }
+
+    /* --------------------------
+       Бейджи
+    -------------------------- */
+    .count-badge {
+      background:var(--badge-bg);
+      color:var(--badge-text);
+      border-radius:12px; padding:2px 8px;
+      font-size:0.85rem; font-weight:bold;
+      margin-left:12px;
+    }
+    .badges, .jira-container {
+      display:flex; flex-wrap:wrap; gap:6px;
+      margin-top:8px; padding-right:4px;
+      max-height:200px; overflow-y:auto;
+    }
+    .badge, .jira-link {
+      padding:4px 8px; font-size:0.85rem;
+      border-radius:10px; font-weight:600;
+      text-decoration:none; transition:background 0.2s;
+      display:inline-block;
+      background:var(--badge-bg); color:var(--badge-text);
+    }
+    .badge:hover {
+      background:var(--accent); color:white;
+    }
+    /* активный бейдж */
+    .badge.active {
+      background:#FFD700 !important; /* жёлтый */
+      color:#000 !important;         /* чёрный текст */
+      outline:3px solid var(--highlight-outline) !important;
     }
     .jira-link {
-      background: #e0f3ff;
-      color: #007bff;
-      text-decoration: none;
-      border-radius: 8px;
-      padding: 5px 10px;
-      margin: 3px 3px 3px 0;
-      display: inline-block;
-      font-weight: 500;
+      background:var(--accent); color:black;
     }
     .jira-link:hover {
-      background: #cce7ff;
+      background:var(--primary); color:white;
+    }
+
+    /* --------------------------
+       Подсветка summary
+    -------------------------- */
+    .highlight {
+      background:var(--highlight-bg) !important;
+      outline:3px solid var(--highlight-outline) !important;
+      color:#000 !important; font-weight:bold !important;
+    }
+
+    /* --------------------------
+       График
+    -------------------------- */
+    #chart-container {
+      background:var(--bg);
+      padding:16px; border-radius:8px; margin-bottom:20px;
+    }
+    #incidentChart {
+      width:100%!important; height:400px!important;
     }
   </style>
 </head>
 <body>
-  <header>
-    <h1>📊 Дашборд Инцидентов</h1>
-  </header>
-
+  <header>📊 Интерактивный Дашборд Инцидентов</header>
   <main>
-    <form method="post" enctype="multipart/form-data">
+    <!-- Оверлей загрузки -->
+    <div id="loader-overlay">
+      <div class="spinner"></div>
+      <div id="loader-text">Загрузка...</div>
+    </div>
+    <!-- Тост -->
+    <div id="upload-toast"></div>
+
+    <!-- Форма загрузки -->
+    <form class="upload" id="upload-form" method="post" enctype="multipart/form-data">
       <input type="file" name="file" required>
-      <button type="submit">📁 Загрузить</button>
+      <button type="submit">Загрузить</button>
     </form>
 
+    <!-- Навигация периодов -->
     <nav>
-      {% for key, label in periods.items() %}
-        <a href="/?period={{ key }}" class="{% if selected == key %}active{% endif %}">{{ label }}</a>
+      {% for key,label in periods.items() %}
+        <a href="/?period={{key}}
+                   {% if from_date %}&from_date={{from_date}}{% endif %}
+                   {% if to_date   %}&to_date={{to_date}}{% endif %}
+                   {% if group_by  %}&group_by={{group_by}}{% endif %}"
+           class="{% if selected==key %}active{% endif %}">
+          {{label}}
+        </a>
       {% endfor %}
     </nav>
 
-    {% if selected == 'custom' %}
-    <form method="get">
-      <input type="hidden" name="period" value="custom">
-      <label>С:</label>
-      <input type="date" name="from" value="{{ from_date }}">
-      <label>По:</label>
-      <input type="date" name="to" value="{{ to_date }}">
-      <button type="submit">Показать</button>
-    </form>
+    <!-- Свой период -->
+    {% if selected=='custom' %}
+      <div class="custom-period">
+        <label>С:</label>
+        <input type="date" id="from_date" name="from_date" value="{{from_date}}">
+        <label>По:</label>
+        <input type="date" id="to_date"   name="to_date"   value="{{to_date}}">
+        <label>Группировать по:</label>
+        <select id="group_by" name="group_by">
+          <option value="D" {% if group_by=='D' %}selected{% endif %}>День</option>
+          <option value="W" {% if group_by=='W' %}selected{% endif %}>Неделя</option>
+          <option value="M" {% if group_by=='M' %}selected{% endif %}>Месяц</option>
+          <option value="Q" {% if group_by=='Q' %}selected{% endif %}>Квартал</option>
+          <option value="Y" {% if group_by=='Y' %}selected{% endif %}>Год</option>
+        </select>
+        <button id="apply-custom">Показать</button>
+      </div>
     {% endif %}
 
-    {% if data %}
-    <div class="flex">
-      <div class="card full">
-        <h3>📈 График инцидентов</h3>
-        <canvas id="incidentChart"></canvas>
-      </div>
+    <!-- Если нет данных -->
+    {% if not data %}
+      <p style="text-align:center; margin-top:40px; font-size:1.1rem;">
+        ⚠️ Загрузите Excel-файл, чтобы увидеть дашборд.
+      </p>
+    {% else %}
+      <div class="flex">
 
-      <div class="card half">
-        <h3>🧠 Ключевые инсайты</h3>
-        <ul>
-          {% for item in data.insights %}<li>{{ item }}</li>{% endfor %}
-          {% if not data.insights %}<i>Нет инсайтов</i>{% endif %}
-        </ul>
-      </div>
+        <!-- График -->
+        <div class="card full" id="chart-container">
+          <h3>📈 График инцидентов</h3>
+          <canvas id="incidentChart"></canvas>
+        </div>
 
-      <div class="card half">
-        <h3>🔮 Прогноз</h3>
-        <p>{{ data.forecast or 'Прогноз недоступен' }}</p>
-      </div>
+        <!-- Инсайты -->
+        <div class="card">
+          <h3>🧠 Ключевые инсайты</h3>
+          <ul>
+            {% for insight in data.insights %}
+              <li>{{insight}}</li>
+            {% endfor %}
+          </ul>
+        </div>
 
-      <div class="card half">
-        <h3>📌 Причины</h3>
-        <ul>
-          {% for k, v in data.reasons.items() %}<li>{{ k }} — {{ v }}</li>{% endfor %}
-          {% if not data.reasons %}<i>Нет данных по причинам</i>{% endif %}
-        </ul>
-      </div>
+        <!-- Прогноз -->
+        <div class="card">
+          <h3>🔮 Прогноз</h3>
+          <p>{{data.forecast}}</p>
+        </div>
 
-      <div class="card half">
-        <h3>👤 Виновники</h3>
-        <ul>
-          {% for k, v in data.blame.items() %}
-            <li style="margin-bottom: 10px;">
-              <strong>{{ k | capitalize }} ({{ v | length }})</strong><br>
+        <!-- Причины -->
+        <div class="card">
+          <h3>📌 Причины ({{data.reasons|length}})</h3>
+          {% for reason, incs in data.reasons.items() %}
+            <details class="relation-item" data-incs="{{incs|join(',')}}">
+              <summary>
+                {{reason}}
+                <span class="count-badge">{{incs|length}}</span>
+              </summary>
               <div class="badges">
-                {% for inc in v %}
-                  <span class="badge">{{ inc }}</span>
+                {% for inc in incs %}
+                  <span class="badge incident-badge" data-inc="{{inc}}">{{inc}}</span>
                 {% endfor %}
               </div>
-            </li>
+            </details>
           {% endfor %}
-          {% if not data.blame %}<i>Нет данных о виновниках</i>{% endif %}
-        </ul>
-      </div>
-
-      <div class="card half">
-        <h3>📄 Инциденты</h3>
-        <div class="badges">
-          {% for item in data.incidents %}
-            <span class="badge">{{ item }}</span>
-          {% endfor %}
-          {% if not data.incidents %}<i>Нет данных по инцидентам</i>{% endif %}
+          {% if not data.reasons %}
+            <p><i>Нет данных по причинам</i></p>
+          {% endif %}
         </div>
-      </div>
 
-      <div class="card half">
-        <h3>🧩 Jira-задачи</h3>
-        <div class="badges">
-          {% for link in data.jira_links %}
-            <a class="jira-link" href="{{ link }}" target="_blank">{{ link.split('/')[-1] }}</a>
+        <!-- Виновники -->
+        <div class="card">
+          <h3>👤 Виновники ({{data.blame|length}})</h3>
+          {% for name, incs in data.blame.items() %}
+            <details class="relation-item" data-incs="{{incs|join(',')}}">
+              <summary>
+                {{name}}
+                <span class="count-badge">{{incs|length}}</span>
+              </summary>
+              <div class="badges">
+                {% for inc in incs %}
+                  <span class="badge incident-badge" data-inc="{{inc}}">{{inc}}</span>
+                {% endfor %}
+              </div>
+            </details>
           {% endfor %}
-          {% if not data.jira_links %}<i>Нет Jira-ссылок</i>{% endif %}
+          {% if not data.blame %}
+            <p><i>Нет данных по ответственным</i></p>
+          {% endif %}
         </div>
-      </div>
-    </div>
 
-    <script>
-      const labels = {{ data.monthly.labels | tojson }};
-      const points = {{ data.monthly.points | tojson }};
-      const forecastLabels = labels.slice();
-      const forecastPoints = points.slice();
+        <!-- Инциденты -->
+        <div class="card">
+          <h3>📄 Инциденты</h3>
+          <details class="relation-item" data-incs="{{data.incidents|join(',')}}">
+            <summary>
+              Всего — {{data.incidents|length}}
+              <span class="count-badge">{{data.incidents|length}}</span>
+            </summary>
+            <div class="badges">
+              {% for inc in data.incidents %}
+                <span class="badge incident-badge" data-inc="{{inc}}">{{inc}}</span>
+              {% endfor %}
+            </div>
+          </details>
+        </div>
 
-      {% if data.forecast and "Прогноз на" in data.forecast %}
-        {% set parts = data.forecast.split("—") %}
-        {% if parts|length > 1 %}
-          {% set forecast_date = parts[0].split("на")[-1].strip() %}
-          {% set forecast_value = parts[1].split("инцидентов")[0].strip() %}
-          forecastLabels.push("{{ forecast_date }}");
-          forecastPoints.push(parseInt("{{ forecast_value }}"));
+        <!-- Jira-задачи -->
+        <div class="card">
+          <h3>🧩 Jira-задачи ({{data.jira|length}})</h3>
+          {% for item in data.jira %}
+            <details class="relation-item" data-incs="{{item.incidents|join(',')}}">
+              <summary>
+                {{item.jira}}
+                <span class="count-badge">{{item.incidents|length}}</span>
+              </summary>
+              <div class="badges">
+                {% for inc in item.incidents %}
+                  <span class="badge incident-badge" data-inc="{{inc}}">{{inc}}</span>
+                {% endfor %}
+              </div>
+              <p style="margin-top:8px; font-size:0.9rem;">
+                <a class="jira-link" href="{{item.url}}" target="_blank">
+                  Открыть {{item.jira}}
+                </a>
+              </p>
+            </details>
+          {% endfor %}
+          {% if not data.jira %}
+            <p><i>Нет связанных Jira-задач</i></p>
+          {% endif %}
+        </div>
+
+      </div><!-- /.flex -->
+
+      <script>
+        // ============
+        // Подготовка
+        // ============
+        const overlay    = document.getElementById('loader-overlay');
+        const overlayTxt = document.getElementById('loader-text');
+        const toast      = document.getElementById('upload-toast');
+
+        // Показывает тост
+        function showToast(text, type='success') {
+          toast.textContent = text;
+          toast.style.background = (type==='success')
+            ? 'var(--primary)' : 'var(--border)';
+          toast.style.display = 'block';
+          setTimeout(()=> toast.style.display = 'none', 3000);
+        }
+
+        // Закреплённые коды после клика
+        let pinnedCodes = [];
+
+        // Навигация по периодам
+        document.querySelectorAll('nav a').forEach(link => {
+          link.addEventListener('click', e => {
+            e.preventDefault();
+            overlayTxt.textContent = 'Загрузка данных…';
+            overlay.style.display = 'flex';
+            setTimeout(()=> window.location = link.href, 600);
+          });
+        });
+
+        // Custom-период
+        {% if selected=='custom' %}
+        document.getElementById('apply-custom').addEventListener('click', e => {
+          e.preventDefault();
+          const sd = document.getElementById('from_date').value;
+          const ed = document.getElementById('to_date').value;
+          const gb = document.getElementById('group_by').value;
+          const params = new URLSearchParams();
+          params.set('period','custom');
+          if(sd) params.set('from_date', sd);
+          if(ed) params.set('to_date', ed);
+          params.set('group_by', gb);
+          overlayTxt.textContent = 'Загрузка данных…';
+          overlay.style.display = 'flex';
+          setTimeout(()=> window.location = '/?' + params.toString(), 600);
+        });
         {% endif %}
-      {% endif %}
 
-      new Chart(document.getElementById('incidentChart'), {
-        type: 'line',
-        data: {
-          labels: forecastLabels,
-          datasets: [
-            {
-              label: 'Инциденты за период',
-              data: points,
-              borderColor: '#007bff',
-              backgroundColor: 'rgba(0,123,255,0.1)',
-              fill: true,
-              tension: 0.4,
-              pointRadius: 4
-            },
-            {
-              label: 'Прогноз',
-              data: forecastPoints,
-              borderColor: 'rgba(255,99,132,1)',
-              backgroundColor: 'rgba(255,99,132,0.2)',
-              fill: false,
-              borderDash: [5, 5],
-              pointStyle: 'triangle',
-              pointRadius: 5
-            }
-          ]
-        },
-        options: {
-          responsive: true,
-          scales: {
-            y: {
-              beginAtZero: true,
-              ticks: { color: '#6c757d' },
-              grid: { color: '#e9ecef' }
-            },
-            x: {
-              ticks: { color: '#6c757d' },
-              grid: { color: '#e9ecef' }
-            }
+        // AJAX-загрузка файла
+        document.getElementById('upload-form').addEventListener('submit', e => {
+          e.preventDefault();
+          overlayTxt.textContent = 'Загрузка файла…';
+          overlay.style.display = 'flex';
+          const xhr = new XMLHttpRequest();
+          xhr.open('POST','/',true);
+          xhr.onload = () => {
+            overlay.style.display = 'none';
+            xhr.status===200
+              ? showToast('✅ Файл загружен успешно')
+              : showToast('❌ Ошибка загрузки','error');
+          };
+          xhr.onerror = () => {
+            overlay.style.display = 'none';
+            showToast('❌ Сетевая ошибка','error');
+          };
+          xhr.send(new FormData(e.target));
+        });
+
+        // Инициализация графика Chart.js
+        const histLabels   = {{data.monthly.labels|tojson}};
+        const histPoints   = {{data.monthly.points|tojson}};
+        const fcLabels     = {{data.forecast_labels|tojson}};
+        const fcPoints     = {{data.forecast_points|tojson}};
+        const allLabels    = histLabels.concat(fcLabels);
+        const realData     = histPoints.concat(Array(fcLabels.length).fill(null));
+        const forecastData = Array(histLabels.length).fill(null).concat(fcPoints);
+
+        const ctx = document.getElementById('incidentChart').getContext('2d');
+        new Chart(ctx, {
+          type:'line',
+          data:{
+            labels:allLabels,
+            datasets:[
+              {
+                label:'Инциденты',
+                data:realData,
+                borderColor:'#333',
+                fill:false,
+                tension:0.4,
+                pointRadius:5
+              },
+              {
+                label:'Прогноз',
+                data:forecastData,
+                borderColor:'#000',
+                borderDash:[6,4],
+                borderWidth:2,
+                fill:false,
+                tension:0.4,
+                pointRadius:6
+              }
+            ]
           },
-          plugins: {
-            legend: {
-              labels: { color: '#495057' }
+          options:{
+            responsive:true,
+            maintainAspectRatio:false,
+            plugins:{
+              legend:{ labels:{ color:'#333', font:{ size:14, weight:'600'} } },
+              tooltip:{ titleColor:'#fff', bodyColor:'#fff', backgroundColor:'#333' }
+            },
+            scales:{
+              x:{ grid:{color:'#EEE'}, ticks:{color:'#555'} },
+              y:{ beginAtZero:true, grid:{color:'#EEE'}, ticks:{color:'#555'} }
             }
           }
+        });
+
+        // Убираем все подсветки
+        function clearHighlights() {
+          document.querySelectorAll('.highlight')
+            .forEach(el => el.classList.remove('highlight'));
+          document.querySelectorAll('.badge.active')
+            .forEach(el => el.classList.remove('active'));
         }
-      });
-    </script>
-    {% else %}
-      <p><strong style="color: #dc3545;">⚠️ Сначала загрузите Excel-файл.</strong></p>
+
+        // Подсвечивает все связанные summary и бейджи
+        function highlightSummary(codes) {
+          clearHighlights();
+          // summary
+          document.querySelectorAll('.relation-item').forEach(det => {
+            const incs = det.dataset.incs.split(',');
+            if(incs.some(c=> codes.includes(c))) {
+              det.querySelector('summary').classList.add('highlight');
+            }
+          });
+          // бейджи
+          document.querySelectorAll('.incident-badge').forEach(badge=>{
+            if(codes.includes(badge.dataset.inc)) {
+              badge.classList.add('active');
+            }
+          });
+        }
+
+        // Сброс при клике вне
+        document.querySelector('main').addEventListener('click', e=>{
+          if(!e.target.closest('summary') && !e.target.closest('.incident-badge')) {
+            pinnedCodes = [];
+            clearHighlights();
+          }
+        });
+
+        // Hover по summary: временная подсветка
+        document.querySelectorAll('.relation-item summary').forEach(summary=>{
+          const det   = summary.parentElement;
+          const codes = det.dataset.incs.split(',');
+          summary.addEventListener('mouseenter', ()=>{
+            if(pinnedCodes.length===0) highlightSummary(codes);
+          });
+          summary.addEventListener('mouseleave', ()=>{
+            if(pinnedCodes.length===0) clearHighlights();
+          });
+          // Клик по summary: закрепляет подсветку блока (all relations)
+          summary.addEventListener('click', e=>{
+            // не отменяем раскрытие — <details> сделает это автоматически
+            pinnedCodes = codes;          // сохраняем закреплённые инциденты
+            highlightSummary(codes);      // подсвечиваем весь блок
+          });
+        });
+
+        // Hover и click по бейджам-инцидентам
+        document.querySelectorAll('.incident-badge').forEach(badge=>{
+          const code = badge.dataset.inc;
+          badge.addEventListener('mouseenter', ()=>{
+            if(pinnedCodes.length===0) highlightSummary([code]);
+          });
+          badge.addEventListener('mouseleave', ()=>{
+            if(pinnedCodes.length===0) clearHighlights();
+          });
+          badge.addEventListener('click', ()=>{
+            pinnedCodes = [code];
+            highlightSummary([code]);
+          });
+        });
+      </script>
     {% endif %}
   </main>
 </body>
