@@ -4,3 +4,6 @@ pandas
 openpyxl
 prophet
 gunicorn
+scikit-learn 
+keras
+tensorflow

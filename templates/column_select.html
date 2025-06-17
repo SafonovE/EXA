@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Выбор колонок для анализа</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body class="bg-gray-50">
+<div class="container mx-auto py-12 px-4 max-w-2xl">
+    <div class="bg-white rounded-lg shadow-md p-8">
+        <h1 class="text-2xl font-bold text-gray-800 mb-4">Выбор колонок для анализа</h1>
+        <p class="mb-4 text-gray-600">Ваш файл не содержит явно узнаваемых колонок.<br>
+            Пожалуйста, выберите какие столбцы соответствуют нужным полям.<br>
+            <b>В любой момент вы сможете перезагрузить файл и изменить выбор.</b>
+        </p>
+        <form method="post" class="space-y-4">
+            <div>
+                <label class="block text-gray-700 mb-1 font-semibold">Дата инцидента:</label>
+                <select name="date_col" required class="w-full border border-gray-300 rounded-md px-3 py-2">
+                    {% for col in columns %}
+                        <option value="{{col}}">{{col}}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="block text-gray-700 mb-1 font-semibold">Сервис:</label>
+                <select name="service_col" required class="w-full border border-gray-300 rounded-md px-3 py-2">
+                    {% for col in columns %}
+                        <option value="{{col}}">{{col}}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="block text-gray-700 mb-1 font-semibold">Причина:</label>
+                <select name="reason_col" required class="w-full border border-gray-300 rounded-md px-3 py-2">
+                    {% for col in columns %}
+                        <option value="{{col}}">{{col}}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="block text-gray-700 mb-1 font-semibold">Ответственный:</label>
+                <select name="responsible_col" required class="w-full border border-gray-300 rounded-md px-3 py-2">
+                    {% for col in columns %}
+                        <option value="{{col}}">{{col}}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <button type="submit" class="mt-4 w-full px-4 py-2 bg-indigo-600 text-white font-bold rounded hover:bg-indigo-700">
+                Применить выбранные колонки
+            </button>
+        </form>
+        {% if preview %}
+            <div class="mt-6">
+                <h2 class="text-lg font-semibold mb-1">Превью данных (первые строки):</h2>
+                <div class="overflow-x-auto text-xs bg-gray-50 rounded-lg p-2" style="max-height:300px;">
+                    {{ preview | safe }}
+                </div>
+            </div>
+        {% endif %}
+    </div>
+</div>
+</body>
+</html>

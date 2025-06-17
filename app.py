@@ -1,357 +1,364 @@
-# -*- coding: utf-8 -*-
-
-
-from flask import Flask, render_template, request, session, redirect, url_for
-from flask_session import Session
+import os
 import pandas as pd
-from prophet import Prophet
-import re
-from collections import Counter
-from datetime import datetime
+import numpy as np
+from flask import Flask, render_template, request, session, redirect, url_for, send_file
+from flask_session import Session
+import tempfile
+import math
 
-# -------------------------
-# 1) ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
-# -------------------------
+# --- Импортируем необходимые модули для ИИ-прогноза ---
+from sklearn.preprocessing import MinMaxScaler
+from keras.models import Sequential
+from keras.layers import Dense, LSTM
+import tensorflow as tf
 
-def find_column(df, keywords):
-    """
-    Ищем первую колонку, имя которой содержит любое слово из keywords.
-    Нужно для автоматического определения:
-      - колонки с датой
-      - колонок с причинами
-    """
-    for col in df.columns:
-        low = col.lower()
-        for kw in keywords:
-            if kw in low:
-                return col
-    return None
-
-def find_incidents(df):
-    """
-    Ищем все коды инцидентов вида INT1234567 по всей табличке.
-    Возвращаем отсортированный список уникальных инцидентов.
-    """
-    pat = re.compile(r'(INT\d{7})', re.IGNORECASE)
-    found = set()
-    for col in df.columns:
-        hits = df[col].astype(str).str.extractall(pat)[0].dropna().unique()
-        found.update(hits)
-    return sorted(found)
-
-def extract_combined_blame(df):
-    """
-    Блок «Виновники». Ищем в двух специальных колонках:
-      - «Группа решателей»
-      - «Отв. за ПР»
-    Для каждого найденного имени:
-      1) собираем текст всей строки (по метке idx)
-      2) ищем в нём списком все коды инцидентов
-      3) сохраняем в {имя: set(инцидентов)}
-    """
-    keys = ['группа решателей', 'отв. за пр']
-    inc_pat = re.compile(r'INT\d{7}', re.IGNORECASE)
-    result = {}
-    for col in df.columns:
-        if any(k in col.lower() for k in keys):
-            for idx, val in df[col].astype(str).items():
-                name = val.strip()
-                if not name or name.lower() in {'nan','нет','прочее'}:
-                    continue
-                # Собираем весь текст строки по метке (loc), а не по позиции (iloc)
-                row_text = ' '.join(df.loc[idx].astype(str))
-                incs = inc_pat.findall(row_text)
-                if incs:
-                    result.setdefault(name, set()).update(incs)
-    # Преобразуем множества во вложенные списки и сортируем
-    return {n: sorted(v) for n,v in result.items()}
-
-def extract_jira_links_with_incidents(df, base_url='https://jira.bcs.ru/browse/'):
-    """
-    Для блока «Jira-задачи»:
-    1) находим ключи вида ABC-123
-    2) для каждой задачи собираем список инцидентов из той же строки
-    3) возвращаем список словарей:
-       [ {'jira': 'ABC-123', 'url': 'https://...', 'incidents': ['INT0000001', ...]}, ... ]
-    """
-    jira_pat = re.compile(r'([A-Z]{2,}-\d+)')
-    inc_pat  = re.compile(r'INT\d{7}', re.IGNORECASE)
-    temp = {}  # {jira_key: set(incs)}
-    for col in df.columns:
-        # Ищем jira во всех колонках
-        for idx, cell in df[col].astype(str).items():
-            for jira in jira_pat.findall(cell):
-                # строим полный URL
-                url = f"{base_url}{jira}"
-                # сразу ищем инциденты в той же строке
-                row_text = ' '.join(df.loc[idx].astype(str))
-                incs = inc_pat.findall(row_text)
-                if incs:
-                    temp.setdefault(jira, {'url': url, 'incs': set()})
-                    temp[jira]['incs'].update(incs)
-    # Приводим к списку словарей и спискам
-    result = []
-    for jira, info in temp.items():
-        result.append({
-            'jira': jira,
-            'url': info['url'],
-            'incidents': sorted(info['incs'])
-        })
-    # Сортируем по алфавиту jira-кода
-    return sorted(result, key=lambda x: x['jira'])
-
-# -------------------------
-# 2) ОСНОВНАЯ ФУНКЦИЯ ОБРАБОТКИ
-# -------------------------
-
-def process_period(df, date_col, reason_cols,
-                   period_key, from_date=None, to_date=None, group_by=None):
-    """
-    1) Фильтруем по выбранному периоду (week/month/quarter/year/custom/all)
-    2) Группируем данные по нужной частоте (D/W/M/Q/Y)
-    3) Считаем число инцидентов в каждом «бакете»
-    4) Строим прогноз Prophet на столько же «бакетов» вперёд
-    5) Собираем результаты для шаблона:
-       - история / прогноз
-       - инсайты
-       - причины (текст + список инцидентов)
-       - виновники
-       - полный список инцидентов
-       - jira-задачи с их инцидентами
-    """
-    latest = df[date_col].max()
-
-    # 2.1) Определяем границы и шаг группировки
-    if period_key == 'week':
-        start, freq = latest - pd.Timedelta(days=7), 'D'
-    elif period_key == 'month':
-        start, freq = latest - pd.DateOffset(months=1), 'M'
-    elif period_key == 'quarter':
-        start, freq = latest - pd.DateOffset(months=3), 'Q'
-    elif period_key == 'year':
-        start, freq = latest - pd.DateOffset(years=1), 'Y'
-    elif period_key == 'custom':
-        try:
-            start = pd.to_datetime(from_date)
-            end   = pd.to_datetime(to_date)
-        except:
-            start = end = None
-        freq = group_by if group_by in ('D','W','M','Q','Y') else 'D'
-    else:  # 'all'
-        start, freq = None, 'Y'
-
-    # 2.2) Применяем фильтры по дате
-    if period_key=='custom' and start and end:
-        df_filt = df[(df[date_col]>=start)&(df[date_col]<=end)]
-    elif start is not None:
-        df_filt = df[df[date_col]>=start]
-    else:
-        df_filt = df.copy()
-
-    # 2.3) Группируем по дате и считаем
-    grouped = df_filt.groupby(pd.Grouper(key=date_col, freq=freq)).size().sort_index()
-    if grouped.empty:
-        return None
-    history_df = pd.DataFrame({'date': grouped.index, 'count': grouped.values})
-
-    # 2.4) Строим прогноз Prophet
-    periods = len(history_df)
-    model_df = history_df.rename(columns={'date':'ds','count':'y'})
-    model_df['ds'] = pd.to_datetime(model_df['ds'])
-    model_df = model_df.sort_values('ds')
-    model = Prophet()
-    model.fit(model_df)
-    future   = model.make_future_dataframe(periods=periods, freq=freq)
-    forecast = model.predict(future).tail(periods)
-
-    # Собираем метки и точки прогноза
-    fc_labels = [d.strftime('%Y-%m-%d') for d in forecast['ds']]
-    fc_points = [int(round(v)) for v in forecast['yhat']]
-
-    # Текстовый прогноз, понятными словами
-    unit_map = {'D':'дней','W':'недель','M':'месяцев','Q':'кварталов','Y':'лет'}
-    unit = unit_map.get(freq, 'точек')
-    avg  = int(round(forecast['yhat'].mean()))
-    fc_text = f"Прогноз на следующие {periods} {unit}: в среднем ~{avg} инцидентов."
-
-    # Инсайты: когда был пик
-    peak_date = grouped.idxmax().strftime('%Y-%m-%d')
-    peak_cnt  = int(grouped.max())
-    insights  = [f"Пик: {peak_cnt} инцидентов ({peak_date})"]
-
-    # ---------------------
-    # 2.5) ДЕТАЛЬНЫЕ ПРИЧИНЫ
-    # ---------------------
-    # Собираем текст причин из всех reason_cols, склеивая через " / "
-    reasons_series = df_filt[reason_cols].fillna('').astype(str).agg(' / '.join, axis=1)
-    reason_map = {}  # {текст причины: set(incIDs)}
-    inc_pat     = re.compile(r'INT\d{7}', re.IGNORECASE)
-    for idx, text in reasons_series.items():
-        reason = text.strip()
-        if not reason:
-            continue
-        # ищем инциденты в той же строке
-        row_txt = ' '.join(df_filt.loc[idx].astype(str))
-        incs = inc_pat.findall(row_txt)
-        if incs:
-            reason_map.setdefault(reason, set()).update(incs)
-    # Переводим множества в списки
-    reasons = {r: sorted(v) for r,v in reason_map.items()}
-
-    # ---------------------
-    # 2.6) ВИНОВНИКИ
-    # ---------------------
-    blame = extract_combined_blame(df_filt)
-
-    # ---------------------
-    # 2.7) СПИСОК ИНЦИДЕНТОВ
-    # ---------------------
-    incidents = find_incidents(df_filt)
-
-    # ---------------------
-    # 2.8) JIRA-ЗАДАЧИ + СВЯЗАННЫЕ ИНЦИДЕНТЫ
-    # ---------------------
-    jira_with_incs = extract_jira_links_with_incidents(df_filt)
-
-    # ---------------------
-    # 2.9) Собираем всё в итоговый словарь
-    # ---------------------
-    return {
-        'monthly': {
-            'labels': [d.strftime('%Y-%m-%d') for d in history_df['date']],
-            'points': [int(v) for v in history_df['count']]
-        },
-        'forecast_labels':  fc_labels,
-        'forecast_points':  fc_points,
-        'forecast':         fc_text,
-        'insights':         insights,
-        'reasons':          reasons,       # {текст: [inc1,inc2,...]}
-        'blame':            blame,         # {имя: [inc1,inc2,...]}
-        'incidents':        incidents,     # [inc1, inc2, ...]
-        'jira':             jira_with_incs # [{'jira':..., 'url':..., 'incidents':[...]}]
-    }
-
-# -------------------------
-# 3) НАСТРОЙКА FLASK
-# -------------------------
+# === Настройки Flask и сессии ===
 app = Flask(__name__)
-app.secret_key = 'your-secret-key'
-app.config['SESSION_TYPE']      = 'filesystem'
-app.config['SESSION_FILE_DIR']  = './.flask_session/'
-app.config['SESSION_PERMANENT'] = False
+app.config['SECRET_KEY'] = 'supersecretkey'
+app.config['SESSION_TYPE'] = 'filesystem'
 Session(app)
 
-# Словарь «ключ»:«название кнопки»
-PERIODS = {
-    'week':    'Неделя',
-    'month':   'Месяц',
-    'quarter': 'Квартал',
-    'year':    'Год',
-    'custom':  'Свой период',
-    'all':     'Все время'
+# === Русские подписи месяцев ===
+MONTHS_RU = [
+    "", "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
+    "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"
+]
+
+GROUPS = {
+    'year': 'Y',
+    'quarter': 'Q',
+    'month': 'M',
+    'week': 'W',
+    'day': 'D',
+    'custom': None  # Для custom-периода берём group_by из запроса
 }
 
-# -------------------------
-# 4) ГЛАВНЫЙ МАРШРУТ "/"
-# -------------------------
+def pretty_period_label(period, date):
+    """Формирует подписи к периодам для графика и прогноза на русском языке."""
+    if period == 'week':
+        weeknum = int(date.strftime('%U'))
+        return f"{date.year} / {weeknum} неделя"
+    elif period == 'month':
+        return f"{date.year} / {MONTHS_RU[date.month]}"
+    elif period == 'quarter':
+        return f"{date.year} / {((date.month-1)//3+1)} квартал"
+    elif period == 'year':
+        return f"{date.year} год"
+    elif period == 'day':
+        return date.strftime('%d.%m.%Y')
+    else:
+        return str(date)
 
-@app.route('/', methods=['GET','POST'])
+def fix_types(obj):
+    """Приводит все значения int64/float64 к int/float для корректного вывода в шаблонах."""
+    if isinstance(obj, dict):
+        return {k: fix_types(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [fix_types(i) for i in obj]
+    elif isinstance(obj, (np.integer, np.int64, np.int32)):
+        return int(obj)
+    elif isinstance(obj, (np.floating, np.float64, np.float32)):
+        return float(obj)
+    else:
+        return obj
+
+def smart_ai_forecast(y, n_pred=3):
+    """
+    Строит прогноз временного ряда с помощью нейросети (Keras, LSTM или Dense).
+    - y: список чисел (инцидентов по периодам)
+    - n_pred: сколько точек вперёд предсказывать (обычно 3)
+    Возвращает: массив из n_pred прогнозов (всегда >=0, без выбросов)
+    """
+    # Если данных меньше 8 — берём медиану последних 3-х точек
+    if len(y) < 8:
+        med = int(np.median(y[-3:])) if y else 0
+        return [max(0, med)] * n_pred
+
+    # Нормализация данных для обучения нейросети (диапазон [0,1])
+    scaler = MinMaxScaler()
+    y_scaled = scaler.fit_transform(np.array(y).reshape(-1, 1)).flatten()
+
+    # Создаём обучающие выборки: X — n_in точек, y — следующая точка
+    n_in = min(6, len(y)-2)  # размер "окна" для прогноза
+    X, y_train = [], []
+    for i in range(len(y_scaled) - n_in):
+        X.append(y_scaled[i:i + n_in])
+        y_train.append(y_scaled[i + n_in])
+    X = np.array(X)
+    y_train = np.array(y_train)
+
+    # Если данных больше 25 — используем LSTM, иначе Dense (чтобы работало и на малых массивах)
+    if len(X) > 25:
+        X_lstm = X.reshape((X.shape[0], X.shape[1], 1))
+        model = Sequential()
+        model.add(LSTM(12, input_shape=(n_in,1)))
+        model.add(Dense(1))
+        model.compile(optimizer='adam', loss='mse')
+        model.fit(X_lstm, y_train, epochs=30, verbose=0)
+    else:
+        model = Sequential()
+        model.add(Dense(16, activation='relu', input_dim=n_in))
+        model.add(Dense(1))
+        model.compile(optimizer='adam', loss='mse')
+        model.fit(X, y_train, epochs=80, verbose=0)
+
+    # Последние n_in точек — стартовое окно для прогноза
+    last_window = y_scaled[-n_in:].reshape(1, -1)
+    preds = []
+    for _ in range(n_pred):
+        if len(X) > 25:
+            to_pred = last_window.reshape((1, n_in, 1))
+        else:
+            to_pred = last_window
+        y_pred = model.predict(to_pred, verbose=0)[0, 0]
+        # Ограничение: не может быть меньше 0
+        y_pred = max(0, y_pred)
+        # Делаем обратную нормализацию (возвращаем "реальные" значения)
+        real_pred = int(round(scaler.inverse_transform([[y_pred]])[0, 0]))
+        real_pred = max(0, real_pred)  # страховка от min/max
+        preds.append(real_pred)
+        # Добавляем прогноз к окну для следующего шага
+        last_window = np.append(last_window[:, 1:], [[y_pred]], axis=1)
+    return preds
+
+@app.route('/', methods=['GET', 'POST'])
 def dashboard():
-    # читаем параметры из URL
-    period    = request.args.get('period', 'month')
-    from_date = request.args.get('from_date')
-    to_date   = request.args.get('to_date')
-    group_by  = request.args.get('group_by', 'D')
+    # --- Загрузка/чтение файла из сессии ---
+    if 'data' in session:
+        df = pd.read_json(session['data'])
+        filename = session.get('filename', 'файл.xlsx')
+        columns = session.get('columns', list(df.columns))
+    else:
+        df = None
+        filename = None
+        columns = None
 
-    # --- если пришёл POST с файлом, сразу сохраняем и редиректим на GET ---
-    if request.method=='POST' and 'file' in request.files:
-        f = request.files['file']
-        try:
-            df = pd.read_excel(f)
-            session['raw_data'] = df.to_json(orient='split', date_format='iso')
-            return redirect(url_for('dashboard',
-                                    period=period,
-                                    from_date=from_date,
-                                    to_date=to_date,
-                                    group_by=group_by))
-        except:
-            # при ошибке чтения — всё равно покажем форму без дашборда
-            return render_template('dashboard.html',
-                                   data=None,
-                                   periods=PERIODS,
-                                   selected=period,
-                                   from_date=from_date,
-                                   to_date=to_date,
-                                   group_by=group_by)
+    # --- Загрузка нового файла ---
+    if request.method == 'POST' and 'file' in request.files:
+        file = request.files['file']
+        if not file.filename:
+            return render_template('dashboard.html', file_uploaded=False)
+        tmp = tempfile.NamedTemporaryFile(delete=False)
+        file.save(tmp.name)
+        tmp.close()
+        ext = os.path.splitext(file.filename)[-1].lower()
+        if ext in ['.xlsx', '.xls']:
+            df = pd.read_excel(tmp.name)
+        else:
+            df = pd.read_csv(tmp.name)
+        os.unlink(tmp.name)
+        filename = file.filename
+        columns = list(df.columns)
+        session['data'] = df.to_json()
+        session['filename'] = filename
+        session['columns'] = columns
+        session['col_map'] = None
+        return redirect(url_for('dashboard'))
 
-    # --- если в сессии нет данных, показываем только форму загрузки ---
-    if 'raw_data' not in session:
-        return render_template('dashboard.html',
-                               data=None,
-                               periods=PERIODS,
-                               selected=period,
-                               from_date=from_date,
-                               to_date=to_date,
-                               group_by=group_by)
+    # --- Нет данных: только форма загрузки ---
+    if df is None:
+        return render_template('dashboard.html', file_uploaded=False)
 
-    # --- восстанавливаем DataFrame из сессии ---
-    try:
-        df = pd.read_json(session['raw_data'], orient='split')
-    except:
-        return render_template('dashboard.html',
-                               data=None,
-                               periods=PERIODS,
-                               selected=period,
-                               from_date=from_date,
-                               to_date=to_date,
-                               group_by=group_by)
+    # --- Автоопределение или ручной выбор колонок ---
+    col_map = session.get('col_map')
+    if not col_map:
+        guesses = {
+            'date': next((c for c in columns if 'дат' in c.lower()), None),
+            'service': next((c for c in columns if 'серв' in c.lower()), None),
+            'reason': next((c for c in columns if 'причин' in c.lower()), None),
+            'responsible': next((c for c in columns if 'ответ' in c.lower()), None)
+        }
+        if all(guesses.values()):
+            col_map = guesses
+            session['col_map'] = col_map
+        else:
+            return redirect(url_for('column_select'))
 
-    # --- автоматический поиск нужных колонок ---
-    date_col      = find_column(df, ['дата','date'])
-    reason_cands  = ['причина','категория шаблона','тип инцидента']
-    reason_cols   = [c for c in df.columns if any(k in c.lower() for k in reason_cands)]
-    if not date_col or not reason_cols:
-        # если не нашли дату или причины — нечего строить
-        return render_template('dashboard.html',
-                               data=None,
-                               periods=PERIODS,
-                               selected=period,
-                               from_date=from_date,
-                               to_date=to_date,
-                               group_by=group_by)
+    # --- Приводим к стандартным именам столбцов ---
+    df = df.rename(columns={
+        col_map['date']: 'date',
+        col_map['service']: 'service',
+        col_map['reason']: 'reason',
+        col_map['responsible']: 'responsible'
+    })
+    df['date'] = pd.to_datetime(df['date'], errors='coerce')
+    df = df.dropna(subset=['date'])
 
-    # --- приводим колонки с датами к реальному типу datetime ---
-    df[date_col] = pd.to_datetime(df[date_col], errors='coerce', dayfirst=True)
-    df = df.dropna(subset=[date_col])  # убираем строки без даты
+    # --- Параметры фильтра и периода ---
+    services = sorted(df['service'].unique())
+    selected_service = request.args.get('service', 'all')
+    selected_period = request.args.get('period', 'month')
+    custom_start = request.args.get('start')
+    custom_end = request.args.get('end')
+    group_by = request.args.get('group_by', 'week')
+    page = int(request.args.get('page', 1))
 
-    # --- обрабатываем весь датасет под выбранный период и группировку ---
-    processed = process_period(df,
-                               date_col,
-                               reason_cols,
-                               period,
-                               from_date,
-                               to_date,
-                               group_by)
-    if not processed:
-        # если по выбранным фильтрам ничего не осталось
-        return render_template('dashboard.html',
-                               data=None,
-                               periods=PERIODS,
-                               selected=period,
-                               from_date=from_date,
-                               to_date=to_date,
-                               group_by=group_by)
+    # --- Фильтрация по сервису ---
+    if selected_service != 'all':
+        df = df[df['service'] == selected_service]
 
-    # --- отрисовываем dashboard.html с готовыми данными ---
-    return render_template('dashboard.html',
-                           data=processed,
-                           periods=PERIODS,
-                           selected=period,
-                           from_date=from_date,
-                           to_date=to_date,
-                           group_by=group_by)
+    # --- Группировка по периоду ---
+    if selected_period == 'custom' and custom_start and custom_end:
+        mask = (df['date'] >= custom_start) & (df['date'] <= custom_end)
+        df_period = df.loc[mask]
+        group_freq = GROUPS.get(group_by, 'W')
+        if group_freq is None: group_freq = 'W'
+        df_g = df_period.groupby(pd.Grouper(key='date', freq=group_freq)).size().reset_index(name='count')
+        chart_labels = [pretty_period_label(group_by, d) for d in df_g['date']]
+        period_for_chart = group_by
+    else:
+        # "Весь период" — история по месяцам по умолчанию
+        group_freq = GROUPS.get(selected_period, 'M' if selected_period == 'all' else 'W')
+        if group_freq is None: group_freq = 'M'
+        df_g = df.groupby(pd.Grouper(key='date', freq=group_freq)).size().reset_index(name='count')
+        period_for_chart = selected_period if selected_period != 'all' else 'month'
+        chart_labels = [pretty_period_label(period_for_chart, d) for d in df_g['date']]
 
-if __name__=='__main__':
-    # debug=True — для локальной разработки,
-    # в продакшене выключите!
+    # --- Реальный ИИ-прогноз через нейросеть ---
+    show_forecast = len(df_g) > 2
+    forecast_strs = []
+    chart_forecast_labels = []
+    chart_forecast = []
+    if show_forecast:
+        y_hist = [int(x) for x in df_g['count']]
+        preds = smart_ai_forecast(y_hist, n_pred=3)
+        last_dt = df_g['date'].max()
+        # Строим подписи для будущих периодов (чтобы не было дубликатов, двигаем месяц/неделю и т.д.)
+        for i, val in enumerate(preds):
+            if period_for_chart == 'month':
+                dt = last_dt + pd.DateOffset(months=i+1)
+            elif period_for_chart == 'week':
+                dt = last_dt + pd.DateOffset(weeks=i+1)
+            elif period_for_chart == 'quarter':
+                dt = last_dt + pd.DateOffset(months=(i+1)*3)
+            elif period_for_chart == 'year':
+                dt = last_dt + pd.DateOffset(years=i+1)
+            elif period_for_chart == 'day':
+                dt = last_dt + pd.DateOffset(days=i+1)
+            else:
+                dt = last_dt + pd.DateOffset(weeks=i+1)
+            period_label = pretty_period_label(period_for_chart, dt)
+            forecast_strs.append(f"{period_label} — {val} инцидентов")
+            chart_forecast_labels.append(period_label)
+        # В график — None на историю, только прогноз к прогнозу
+        chart_forecast = [None] * len(y_hist) + preds
+
+    # --- Строим "пироги", "бары", топы, рекомендации ---
+    services_counts = df['service'].value_counts().head(5)
+    services_pie = {
+        'labels': list(services_counts.index),
+        'values': [int(x) for x in services_counts.values]
+    }
+    reasons_counts = df['reason'].value_counts().head(5)
+    reasons_bar = {
+        'labels': list(reasons_counts.index),
+        'values': [int(x) for x in reasons_counts.values]
+    }
+    responsibles = []
+    for name, count in df['responsible'].value_counts().head(5).items():
+        responsibles.append({'name': name, 'count': int(count)})
+
+    recommendations = [
+        "Проводите профилактику в периоды минимального числа инцидентов",
+        "Следите за всплесками по конкретным причинам",
+        "Назначайте ответственных согласно топ-5"
+    ]
+
+    # --- Пагинация (окно 7 кнопок) ---
+    rows_per_page = 50
+    total_rows = len(df)
+    total_pages = max(1, math.ceil(total_rows / rows_per_page))
+    page = max(1, min(page, total_pages))
+    start_idx = (page - 1) * rows_per_page
+    end_idx = start_idx + rows_per_page
+    page_rows = df.iloc[start_idx:end_idx].copy()
+    page_rows['date'] = page_rows['date'].dt.strftime('%Y-%m-%d %H:%M:%S')
+
+    def pagination_window(current, max_page, window=7):
+        half = window // 2
+        if max_page <= window:
+            return list(range(1, max_page + 1))
+        elif current <= half + 1:
+            return list(range(1, window)) + ["...", max_page]
+        elif current >= max_page - half:
+            return [1, "..."] + list(range(max_page - window + 2, max_page + 1))
+        else:
+            return [1, "..."] + list(range(current - half + 1, current + half)) + ["...", max_page]
+
+    page_list = pagination_window(page, total_pages, 7)
+
+    # --- Формируем объект данных для шаблона ---
+    data = fix_types({
+        'filename': filename,
+        'rowcount': len(df),
+        'services': services,
+        'forecast': {
+            'values': forecast_strs,
+            'risk_service': services_pie['labels'][0] if services_pie['labels'] else 'Нет данных',
+            'best_days': "Пн, Вт, Ср"
+        },
+        'responsibles': responsibles,
+        'recommendations': recommendations,
+        'services_pie': services_pie,
+        'reasons_bar': reasons_bar,
+        'table': page_rows.to_dict('records'),
+        'total_pages': total_pages,
+        'page': page,
+        'total_rows': total_rows,
+        'page_list': page_list,
+        'chart': {
+            'labels': chart_labels + chart_forecast_labels,
+            'count': [int(x) for x in df_g['count']] + ([None] * len(chart_forecast_labels)),
+            'forecast': [None] * len(df_g['count']) + (chart_forecast[-3:] if show_forecast else [])
+        }
+    })
+
+    return render_template(
+        'dashboard.html',
+        file_uploaded=True,
+        data=data,
+        selected_service=selected_service,
+        selected_period=selected_period,
+        custom_start=custom_start,
+        custom_end=custom_end,
+        group_by=group_by,
+        show_forecast=show_forecast,
+        request=request
+    )
+
+@app.route('/column_select', methods=['GET', 'POST'])
+def column_select():
+    columns = session.get('columns', [])
+    if request.method == 'POST':
+        col_map = {
+            'date': request.form['date_col'],
+            'service': request.form['service_col'],
+            'reason': request.form['reason_col'],
+            'responsible': request.form['responsible_col']
+        }
+        session['col_map'] = col_map
+        return redirect(url_for('dashboard'))
+    preview = None
+    if 'data' in session:
+        df = pd.read_json(session['data'])
+        preview = df.head(8).to_html(index=False)
+    return render_template('column_select.html', columns=columns, col_map={}, preview=preview)
+
+@app.route('/howto')
+def howto():
+    return render_template('howto.html')
+
+@app.route('/export_csv')
+def export_csv():
+    if 'data' not in session:
+        return redirect(url_for('dashboard'))
+    df = pd.read_json(session['data'])
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.csv')
+    df.to_csv(tmp.name, index=False)
+    tmp.close()
+    return send_file(tmp.name, as_attachment=True, download_name='incidents_export.csv')
+
+if __name__ == "__main__":
+    # Подавляем лишние логи TensorFlow для чистоты вывода
+    tf.get_logger().setLevel('ERROR')
     app.run(debug=True)

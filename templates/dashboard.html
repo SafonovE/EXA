@@ -1,609 +1,337 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>📊 Интерактивный Дашборд Инцидентов</title>
-
-  <!-- Chart.js для отрисовки графиков -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <style>
-    /* =====================================================
-       Цветовая палитра Sega-пастель
-    ===================================================== */
-    :root {
-      --primary:           #0050A0;        /* основной синий */
-      --accent:            #00A1E9;        /* голубой ховер */
-      --bg:                #F0F8FF;        /* фон страницы */
-      --card-bg:           #FFFFFF;        /* фон карточек */
-      --text:              #333333;        /* основной текст */
-      --border:            #DDDDDD;        /* рамки */
-      --badge-bg:          #0050A0;        /* фон бейджей */
-      --badge-text:        #FFFFFF;        /* текст бейджей */
-      --highlight-bg:      rgba(255,255,0,0.3); /* полупрозрачный жёлтый */
-      --highlight-outline: #FF0000;        /* красная обводка */
-    }
-
-    /* --------------------------------------------
-       Сброс отступов/паддингов, базовая типографика
-    -------------------------------------------- */
-    *, *::before, *::after {
-      box-sizing: border-box;
-      margin: 0; padding: 0;
-    }
-    body {
-      background: var(--bg);
-      color: var(--text);
-      font-family: 'Segoe UI', sans-serif;
-      line-height: 1.5;
-    }
-
-    /* --------------------------
-       Шапка сайта
-    -------------------------- */
-    header {
-      background: var(--primary);
-      color: white;
-      text-align: center;
-      padding: 20px;
-      font-size: 1.75rem;
-      font-weight: bold;
-    }
-
-    /* --------------------------
-       Главный контейнер
-    -------------------------- */
-    main {
-      max-width: 1200px;
-      margin: 20px auto;
-      padding: 0 20px;
-    }
-
-    /* =================================================
-       Оверлей и тост для индикации загрузки
-    ================================================= */
-    #loader-overlay {
-      position: fixed; top:0; left:0; right:0; bottom:0;
-      background: rgba(0,0,0,0.6);
-      display: none; align-items:center; justify-content:center;
-      flex-direction:column; z-index:1000;
-      color:white; font-size:1.2rem; font-weight:bold;
-    }
-    #loader-overlay .spinner {
-      width:60px; height:60px;
-      border:8px solid rgba(255,255,255,0.3);
-      border-top-color:white;
-      border-radius:50%;
-      animation:spin 1s linear infinite;
-      margin-bottom:12px;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
-
-    #upload-toast {
-      position:fixed; top:20px; left:50%;
-      transform:translateX(-50%);
-      padding:12px 24px;
-      background:var(--primary);
-      color:white;
-      border-radius:8px;
-      box-shadow:0 4px 12px rgba(0,0,0,0.2);
-      display:none; z-index:1100; font-weight:bold;
-      animation:slideDown 0.5s ease-out forwards;
-    }
-    @keyframes slideDown {
-      from { opacity:0; transform: translate(-50%,-50px); }
-      to   { opacity:1; transform: translate(-50%,0); }
-    }
-
-    /* --------------------------
-       Форма загрузки файла
-    -------------------------- */
-    .upload {
-      display:flex; gap:8px; margin-bottom:20px;
-    }
-    .upload input[type="file"] {
-      flex:1; padding:6px; border:1px solid var(--border);
-      border-radius:6px; background:var(--card-bg);
-    }
-    .upload button {
-      padding:8px 16px; background:var(--primary);
-      color:white; border:none; border-radius:6px;
-      cursor:pointer; font-weight:600;
-      transition:background 0.2s;
-    }
-    .upload button:hover {
-      background:var(--accent);
-    }
-
-    /* --------------------------
-       Навигация периодов
-    -------------------------- */
-    nav {
-      display:flex; flex-wrap:wrap; gap:8px;
-      margin-bottom:20px;
-    }
-    nav a {
-      background:var(--card-bg); color:var(--text);
-      padding:8px 16px; border:1px solid var(--border);
-      border-radius:6px; text-decoration:none;
-      font-weight:600; transition:background 0.2s, color 0.2s;
-    }
-    nav a:hover, nav a.active {
-      background:var(--primary); color:white;
-      border-color:var(--primary);
-    }
-
-    /* --------------------------
-       Свой период
-    -------------------------- */
-    .custom-period {
-      display:flex; flex-wrap:wrap; gap:12px;
-      align-items:center; margin-bottom:20px;
-    }
-    .custom-period label { font-weight:600; }
-    .custom-period input, .custom-period select {
-      padding:6px 8px; border:1px solid var(--border);
-      border-radius:6px; background:var(--card-bg);
-    }
-    .custom-period button {
-      padding:6px 12px; background:var(--primary);
-      color:white; border:none; border-radius:6px;
-      cursor:pointer; transition:background 0.2s;
-    }
-    .custom-period button:hover {
-      background:var(--accent);
-    }
-
-    /* --------------------------
-       Сетка карточек
-    -------------------------- */
-    .flex {
-      display:flex; flex-wrap:wrap; gap:20px;
-    }
-    .card {
-      background:var(--card-bg);
-      border:1px solid var(--border);
-      border-radius:8px;
-      padding:20px;
-      flex:1 1 calc(50% - 20px);
-      box-shadow:0 2px 8px rgba(0,0,0,0.05);
-    }
-    .card.full { flex:1 1 100%; }
-    .card h3 {
-      margin-bottom:12px;
-      color:var(--primary);
-      font-size:1.25rem;
-      font-weight:700;
-    }
-
-    /* --------------------------
-       Аккордеоны
-    -------------------------- */
-    details { margin-top:10px; }
-    details summary {
-      background:var(--primary); color:white;
-      padding:6px 10px; font-size:0.95rem;
-      border-radius:6px; cursor:pointer;
-      font-weight:600; transition:background 0.2s;
-      display:flex; justify-content:space-between;
-      align-items:center;
-    }
-    details summary:hover {
-      background:var(--accent);
-    }
-    details[open] summary {
-      background:var(--card-bg); color:var(--text);
-    }
-
-    /* --------------------------
-       Бейджи
-    -------------------------- */
-    .count-badge {
-      background:var(--badge-bg);
-      color:var(--badge-text);
-      border-radius:12px; padding:2px 8px;
-      font-size:0.85rem; font-weight:bold;
-      margin-left:12px;
-    }
-    .badges, .jira-container {
-      display:flex; flex-wrap:wrap; gap:6px;
-      margin-top:8px; padding-right:4px;
-      max-height:200px; overflow-y:auto;
-    }
-    .badge, .jira-link {
-      padding:4px 8px; font-size:0.85rem;
-      border-radius:10px; font-weight:600;
-      text-decoration:none; transition:background 0.2s;
-      display:inline-block;
-      background:var(--badge-bg); color:var(--badge-text);
-    }
-    .badge:hover {
-      background:var(--accent); color:white;
-    }
-    /* активный бейдж */
-    .badge.active {
-      background:#FFD700 !important; /* жёлтый */
-      color:#000 !important;         /* чёрный текст */
-      outline:3px solid var(--highlight-outline) !important;
-    }
-    .jira-link {
-      background:var(--accent); color:black;
-    }
-    .jira-link:hover {
-      background:var(--primary); color:white;
-    }
-
-    /* --------------------------
-       Подсветка summary
-    -------------------------- */
-    .highlight {
-      background:var(--highlight-bg) !important;
-      outline:3px solid var(--highlight-outline) !important;
-      color:#000 !important; font-weight:bold !important;
-    }
-
-    /* --------------------------
-       График
-    -------------------------- */
-    #chart-container {
-      background:var(--bg);
-      padding:16px; border-radius:8px; margin-bottom:20px;
-    }
-    #incidentChart {
-      width:100%!important; height:400px!important;
-    }
-  </style>
+    <meta charset="UTF-8">
+    <title>Интерактивный Дашборд Инцидентов</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        /* Компактные неоновые кнопки периода */
+        .segabtn {
+            font-family: 'Montserrat', 'Arial', sans-serif;
+            font-size: 1em;
+            padding: 10px 22px;
+            border: 2.5px solid #0ff;
+            background: #172550;
+            color: #fff;
+            border-radius: 12px;
+            margin: 0 8px 10px 0;
+            box-shadow: 0 2px 0 #00d0ff, 0 0 6px #00eaff70;
+            cursor: pointer;
+            transition: background 0.13s, box-shadow 0.10s, transform 0.13s;
+            outline: none;
+            min-width: 105px;
+            min-height: 38px;
+            display: inline-block;
+        }
+        .segabtn.active, .segabtn:focus {
+            background: #ffe169;
+            border-color: #ffd500;
+            color: #1c1a1f;
+            box-shadow: 0 0 0 3px #ffe16977, 0 8px 22px #ffe16955;
+            transform: scale(1.05);
+            z-index: 2;
+        }
+        .segabtn:hover:not(.active) {
+            background: #1bd8fd;
+            color: #192f6e;
+            border-color: #0ff;
+            box-shadow: 0 0 12px #0ff, 0 2px 8px #1ae6ff;
+            transform: translateY(-2px) scale(1.03);
+        }
+    </style>
 </head>
-<body>
-  <header>📊 Интерактивный Дашборд Инцидентов</header>
-  <main>
-    <!-- Оверлей загрузки -->
-    <div id="loader-overlay">
-      <div class="spinner"></div>
-      <div id="loader-text">Загрузка...</div>
+<body class="bg-gray-50">
+
+<!-- Оверлей загрузки -->
+<div id="loading-overlay" style="display:none; position:fixed; left:0;top:0;width:100vw;height:100vh;z-index:9999; background:rgba(32,22,67,0.21);backdrop-filter:blur(2px)">
+    <div style="position:absolute;top:45%;left:50%;transform:translate(-50%,-50%);font-family:'Montserrat',monospace;font-size:1.3em;color:#522eff;text-align:center;">
+        <div class="animate-bounce" style="font-size:2em;">⏳</div>
+        <div style="margin-top:12px;">ИДЕТ ЗАГРУЗКА<br><span class="animate-pulse">•••••••••</span></div>
     </div>
-    <!-- Тост -->
-    <div id="upload-toast"></div>
+</div>
+<script>
+    document.addEventListener('DOMContentLoaded',()=>{
+        document.querySelectorAll('form').forEach(form=>{
+            form.addEventListener('submit',()=>{
+                document.getElementById('loading-overlay').style.display = '';
+            });
+        });
+    });
+</script>
 
-    <!-- Форма загрузки -->
-    <form class="upload" id="upload-form" method="post" enctype="multipart/form-data">
-      <input type="file" name="file" required>
-      <button type="submit">Загрузить</button>
-    </form>
+<div class="container mx-auto py-6 px-2 md:px-6 max-w-6xl">
+    <!-- Заголовок -->
+    <div class="mb-6">
+        <h1 class="text-3xl font-bold text-gray-800 mb-1">Интерактивный Дашборд Инцидентов</h1>
+        <p class="text-gray-600">Аналитика IT инцидентов сервисов БКС «Мир инвестиций»</p>
+    </div>
 
-    <!-- Навигация периодов -->
-    <nav>
-      {% for key,label in periods.items() %}
-        <a href="/?period={{key}}
-                   {% if from_date %}&from_date={{from_date}}{% endif %}
-                   {% if to_date   %}&to_date={{to_date}}{% endif %}
-                   {% if group_by  %}&group_by={{group_by}}{% endif %}"
-           class="{% if selected==key %}active{% endif %}">
-          {{label}}
-        </a>
-      {% endfor %}
-    </nav>
-
-    <!-- Свой период -->
-    {% if selected=='custom' %}
-      <div class="custom-period">
-        <label>С:</label>
-        <input type="date" id="from_date" name="from_date" value="{{from_date}}">
-        <label>По:</label>
-        <input type="date" id="to_date"   name="to_date"   value="{{to_date}}">
-        <label>Группировать по:</label>
-        <select id="group_by" name="group_by">
-          <option value="D" {% if group_by=='D' %}selected{% endif %}>День</option>
-          <option value="W" {% if group_by=='W' %}selected{% endif %}>Неделя</option>
-          <option value="M" {% if group_by=='M' %}selected{% endif %}>Месяц</option>
-          <option value="Q" {% if group_by=='Q' %}selected{% endif %}>Квартал</option>
-          <option value="Y" {% if group_by=='Y' %}selected{% endif %}>Год</option>
-        </select>
-        <button id="apply-custom">Показать</button>
-      </div>
-    {% endif %}
-
-    <!-- Если нет данных -->
-    {% if not data %}
-      <p style="text-align:center; margin-top:40px; font-size:1.1rem;">
-        ⚠️ Загрузите Excel-файл, чтобы увидеть дашборд.
-      </p>
-    {% else %}
-      <div class="flex">
-
-        <!-- График -->
-        <div class="card full" id="chart-container">
-          <h3>📈 График инцидентов</h3>
-          <canvas id="incidentChart"></canvas>
-        </div>
-
-        <!-- Инсайты -->
-        <div class="card">
-          <h3>🧠 Ключевые инсайты</h3>
-          <ul>
-            {% for insight in data.insights %}
-              <li>{{insight}}</li>
-            {% endfor %}
-          </ul>
-        </div>
-
-        <!-- Прогноз -->
-        <div class="card">
-          <h3>🔮 Прогноз</h3>
-          <p>{{data.forecast}}</p>
-        </div>
-
-        <!-- Причины -->
-        <div class="card">
-          <h3>📌 Причины ({{data.reasons|length}})</h3>
-          {% for reason, incs in data.reasons.items() %}
-            <details class="relation-item" data-incs="{{incs|join(',')}}">
-              <summary>
-                {{reason}}
-                <span class="count-badge">{{incs|length}}</span>
-              </summary>
-              <div class="badges">
-                {% for inc in incs %}
-                  <span class="badge incident-badge" data-inc="{{inc}}">{{inc}}</span>
-                {% endfor %}
-              </div>
-            </details>
-          {% endfor %}
-          {% if not data.reasons %}
-            <p><i>Нет данных по причинам</i></p>
-          {% endif %}
-        </div>
-
-        <!-- Виновники -->
-        <div class="card">
-          <h3>👤 Виновники ({{data.blame|length}})</h3>
-          {% for name, incs in data.blame.items() %}
-            <details class="relation-item" data-incs="{{incs|join(',')}}">
-              <summary>
-                {{name}}
-                <span class="count-badge">{{incs|length}}</span>
-              </summary>
-              <div class="badges">
-                {% for inc in incs %}
-                  <span class="badge incident-badge" data-inc="{{inc}}">{{inc}}</span>
-                {% endfor %}
-              </div>
-            </details>
-          {% endfor %}
-          {% if not data.blame %}
-            <p><i>Нет данных по ответственным</i></p>
-          {% endif %}
-        </div>
-
-        <!-- Инциденты -->
-        <div class="card">
-          <h3>📄 Инциденты</h3>
-          <details class="relation-item" data-incs="{{data.incidents|join(',')}}">
-            <summary>
-              Всего — {{data.incidents|length}}
-              <span class="count-badge">{{data.incidents|length}}</span>
-            </summary>
-            <div class="badges">
-              {% for inc in data.incidents %}
-                <span class="badge incident-badge" data-inc="{{inc}}">{{inc}}</span>
-              {% endfor %}
+    <!-- Загрузка файла -->
+    <div class="bg-white rounded-lg shadow-md p-6 mb-8">
+        <h2 class="text-xl font-semibold text-gray-800 mb-2">Загрузите файл с данными</h2>
+        <form method="post" enctype="multipart/form-data" class="mb-3" id="upload-form">
+            <label for="file-upload" class="flex flex-col items-center justify-center border-2 border-dashed border-indigo-400 rounded-md p-6 cursor-pointer bg-indigo-50 hover:bg-indigo-100 transition">
+                <svg class="w-12 h-12 text-indigo-400 mb-2" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M16 16v2a2 2 0 002 2H6a2 2 0 01-2-2v-2m12-6l-4-4m0 0L8 10m4-4v12"></path></svg>
+                <input id="file-upload" name="file" type="file" class="hidden" required>
+                <span class="text-indigo-600 font-semibold">Перетащите файл сюда или <span class="underline">Выберите файл</span></span>
+                <span class="text-gray-400 text-sm mt-1">CSV или Excel</span>
+            </label>
+            <button type="submit" class="mt-3 px-6 py-2 rounded bg-indigo-600 hover:bg-indigo-700 text-white font-semibold">Анализировать данные</button>
+        </form>
+        {% if file_uploaded %}
+            <div class="p-3 mt-2 bg-green-100 text-green-700 rounded flex items-center space-x-2 font-semibold">
+                <svg class="w-6 h-6 text-green-500 animate-bounce" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"></path></svg>
+                <span>Файл успешно загружен!<br>Выберите фильтр или начните анализ</span>
             </div>
-          </details>
-        </div>
-
-        <!-- Jira-задачи -->
-        <div class="card">
-          <h3>🧩 Jira-задачи ({{data.jira|length}})</h3>
-          {% for item in data.jira %}
-            <details class="relation-item" data-incs="{{item.incidents|join(',')}}">
-              <summary>
-                {{item.jira}}
-                <span class="count-badge">{{item.incidents|length}}</span>
-              </summary>
-              <div class="badges">
-                {% for inc in item.incidents %}
-                  <span class="badge incident-badge" data-inc="{{inc}}">{{inc}}</span>
-                {% endfor %}
-              </div>
-              <p style="margin-top:8px; font-size:0.9rem;">
-                <a class="jira-link" href="{{item.url}}" target="_blank">
-                  Открыть {{item.jira}}
-                </a>
-              </p>
-            </details>
-          {% endfor %}
-          {% if not data.jira %}
-            <p><i>Нет связанных Jira-задач</i></p>
-          {% endif %}
-        </div>
-
-      </div><!-- /.flex -->
-
-      <script>
-        // ============
-        // Подготовка
-        // ============
-        const overlay    = document.getElementById('loader-overlay');
-        const overlayTxt = document.getElementById('loader-text');
-        const toast      = document.getElementById('upload-toast');
-
-        // Показывает тост
-        function showToast(text, type='success') {
-          toast.textContent = text;
-          toast.style.background = (type==='success')
-            ? 'var(--primary)' : 'var(--border)';
-          toast.style.display = 'block';
-          setTimeout(()=> toast.style.display = 'none', 3000);
-        }
-
-        // Закреплённые коды после клика
-        let pinnedCodes = [];
-
-        // Навигация по периодам
-        document.querySelectorAll('nav a').forEach(link => {
-          link.addEventListener('click', e => {
-            e.preventDefault();
-            overlayTxt.textContent = 'Загрузка данных…';
-            overlay.style.display = 'flex';
-            setTimeout(()=> window.location = link.href, 600);
-          });
-        });
-
-        // Custom-период
-        {% if selected=='custom' %}
-        document.getElementById('apply-custom').addEventListener('click', e => {
-          e.preventDefault();
-          const sd = document.getElementById('from_date').value;
-          const ed = document.getElementById('to_date').value;
-          const gb = document.getElementById('group_by').value;
-          const params = new URLSearchParams();
-          params.set('period','custom');
-          if(sd) params.set('from_date', sd);
-          if(ed) params.set('to_date', ed);
-          params.set('group_by', gb);
-          overlayTxt.textContent = 'Загрузка данных…';
-          overlay.style.display = 'flex';
-          setTimeout(()=> window.location = '/?' + params.toString(), 600);
-        });
         {% endif %}
+        {% if data %}
+            <div class="text-green-600 mt-2">✔️ Файл: <b>{{data.filename}}</b>, строк: {{data.rowcount}}</div>
+        {% endif %}
+    </div>
 
-        // AJAX-загрузка файла
-        document.getElementById('upload-form').addEventListener('submit', e => {
-          e.preventDefault();
-          overlayTxt.textContent = 'Загрузка файла…';
-          overlay.style.display = 'flex';
-          const xhr = new XMLHttpRequest();
-          xhr.open('POST','/',true);
-          xhr.onload = () => {
-            overlay.style.display = 'none';
-            xhr.status===200
-              ? showToast('✅ Файл загружен успешно')
-              : showToast('❌ Ошибка загрузки','error');
-          };
-          xhr.onerror = () => {
-            overlay.style.display = 'none';
-            showToast('❌ Сетевая ошибка','error');
-          };
-          xhr.send(new FormData(e.target));
-        });
-
-        // Инициализация графика Chart.js
-        const histLabels   = {{data.monthly.labels|tojson}};
-        const histPoints   = {{data.monthly.points|tojson}};
-        const fcLabels     = {{data.forecast_labels|tojson}};
-        const fcPoints     = {{data.forecast_points|tojson}};
-        const allLabels    = histLabels.concat(fcLabels);
-        const realData     = histPoints.concat(Array(fcLabels.length).fill(null));
-        const forecastData = Array(histLabels.length).fill(null).concat(fcPoints);
-
-        const ctx = document.getElementById('incidentChart').getContext('2d');
-        new Chart(ctx, {
-          type:'line',
-          data:{
-            labels:allLabels,
-            datasets:[
-              {
-                label:'Инциденты',
-                data:realData,
-                borderColor:'#333',
-                fill:false,
-                tension:0.4,
-                pointRadius:5
-              },
-              {
-                label:'Прогноз',
-                data:forecastData,
-                borderColor:'#000',
-                borderDash:[6,4],
-                borderWidth:2,
-                fill:false,
-                tension:0.4,
-                pointRadius:6
-              }
-            ]
-          },
-          options:{
-            responsive:true,
-            maintainAspectRatio:false,
-            plugins:{
-              legend:{ labels:{ color:'#333', font:{ size:14, weight:'600'} } },
-              tooltip:{ titleColor:'#fff', bodyColor:'#fff', backgroundColor:'#333' }
-            },
-            scales:{
-              x:{ grid:{color:'#EEE'}, ticks:{color:'#555'} },
-              y:{ beginAtZero:true, grid:{color:'#EEE'}, ticks:{color:'#555'} }
+    <!-- Фильтры анализа -->
+    {% if data %}
+    <div class="bg-white rounded-lg shadow-md p-6 mb-8">
+        <h2 class="text-xl font-semibold text-gray-800 mb-4">Настройки анализа</h2>
+        <form method="get" class="flex flex-wrap items-center gap-4" id="filter-form" autocomplete="off" onsubmit="return setPeriodValue();">
+            <label class="block text-gray-700 mb-2 mr-3">Сервис:
+                <select class="border border-gray-300 rounded-md px-3 py-2" name="service">
+                    <option value="all">Все сервисы</option>
+                    {% for srv in data.services %}
+                        <option value="{{srv}}" {% if selected_service==srv %}selected{% endif %}>{{srv}}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <div class="flex flex-wrap gap-2 items-center">
+                <label class="mr-2">Период:</label>
+                <input type="hidden" name="period" id="period-input" value="{{selected_period}}">
+                <button type="button" class="segabtn {% if selected_period=='year' %}active{% endif %}" onclick="setPeriod('year', event)">Год</button>
+                <button type="button" class="segabtn {% if selected_period=='quarter' %}active{% endif %}" onclick="setPeriod('quarter', event)">Квартал</button>
+                <button type="button" class="segabtn {% if selected_period=='month' %}active{% endif %}" onclick="setPeriod('month', event)">Месяц</button>
+                <button type="button" class="segabtn {% if selected_period=='week' %}active{% endif %}" onclick="setPeriod('week', event)">Неделя</button>
+                <button type="button" class="segabtn {% if selected_period=='day' %}active{% endif %}" onclick="setPeriod('day', event)">День</button>
+                <button type="button" class="segabtn {% if selected_period=='all' %}active{% endif %}" onclick="setPeriod('all', event)">Весь период</button>
+                <button type="button" class="segabtn {% if selected_period=='custom' %}active{% endif %}" onclick="setPeriod('custom', event)">Свой период</button>
+            </div>
+            <div id="custom-period-block" class="flex gap-2 items-center {% if selected_period != 'custom' %}hidden{% endif %}">
+                <label>от <input type="date" name="start" value="{{custom_start}}" class="border border-gray-300 rounded-md px-2 py-1"></label>
+                <label>до <input type="date" name="end" value="{{custom_end}}" class="border border-gray-300 rounded-md px-2 py-1"></label>
+                <select name="group_by" class="border border-gray-300 rounded-md px-2 py-1">
+                    <option value="day" {% if group_by=="day" %}selected{% endif %}>По дням</option>
+                    <option value="week" {% if group_by=="week" %}selected{% endif %}>По неделям</option>
+                    <option value="month" {% if group_by=="month" %}selected{% endif %}>По месяцам</option>
+                    <option value="quarter" {% if group_by=="quarter" %}selected{% endif %}>По кварталам</option>
+                    <option value="year" {% if group_by=="year" %}selected{% endif %}>По годам</option>
+                </select>
+            </div>
+            <button type="submit" class="ml-2 px-7 py-2 font-bold rounded bg-indigo-700 hover:bg-indigo-900 text-white shadow-md">Показать</button>
+        </form>
+        <script>
+            function setPeriod(val, e) {
+                document.getElementById('period-input').value = val;
+                document.querySelectorAll('.segabtn').forEach(btn=>btn.classList.remove('active'));
+                e.target.classList.add('active');
+                let custom = document.getElementById('custom-period-block');
+                if (val === 'custom') custom.classList.remove('hidden');
+                else custom.classList.add('hidden');
             }
-          }
-        });
+            function setPeriodValue() { return true; }
+            document.addEventListener('DOMContentLoaded', function(){
+                if(document.getElementById('period-input').value === 'custom') {
+                    document.getElementById('custom-period-block').classList.remove('hidden');
+                }
+            });
+        </script>
+    </div>
 
-        // Убираем все подсветки
-        function clearHighlights() {
-          document.querySelectorAll('.highlight')
-            .forEach(el => el.classList.remove('highlight'));
-          document.querySelectorAll('.badge.active')
-            .forEach(el => el.classList.remove('active'));
-        }
+    <!-- График инцидентов и прогноз -->
+    <div class="bg-white rounded-lg shadow-md p-6 mb-8">
+        <div class="flex justify-between items-center mb-2">
+            <h2 class="text-2xl font-semibold text-gray-800">Динамика инцидентов</h2>
+            <span class="text-gray-400 cursor-pointer" title="График показывает динамику и прогноз инцидентов по выбранному периоду.">i</span>
+        </div>
+        <canvas id="incidents-chart" height="110"></canvas>
+    </div>
 
-        // Подсвечивает все связанные summary и бейджи
-        function highlightSummary(codes) {
-          clearHighlights();
-          // summary
-          document.querySelectorAll('.relation-item').forEach(det => {
-            const incs = det.dataset.incs.split(',');
-            if(incs.some(c=> codes.includes(c))) {
-              det.querySelector('summary').classList.add('highlight');
-            }
-          });
-          // бейджи
-          document.querySelectorAll('.incident-badge').forEach(badge=>{
-            if(codes.includes(badge.dataset.inc)) {
-              badge.classList.add('active');
-            }
-          });
-        }
+    <!-- Диаграммы Pie и Bar -->
+    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-2 gap-6 mb-8">
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <h3 class="text-xl font-semibold mb-2">Распределение по сервисам</h3>
+            <canvas id="services-pie" height="160"></canvas>
+        </div>
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <h3 class="text-xl font-semibold mb-2">Топ-5 причин инцидентов</h3>
+            <canvas id="reasons-bar" height="160"></canvas>
+        </div>
+    </div>
 
-        // Сброс при клике вне
-        document.querySelector('main').addEventListener('click', e=>{
-          if(!e.target.closest('summary') && !e.target.closest('.incident-badge')) {
-            pinnedCodes = [];
-            clearHighlights();
-          }
-        });
+    <!-- Прогноз, Ответственные, Рекомендации -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <h3 class="font-semibold mb-2 text-lg">Прогноз</h3>
+            <div>
+                <span class="font-semibold text-indigo-800 text-lg">
+                    Прогноз на 3 периода:
+                </span>
+                <br>
+                {% if data.forecast['values'] %}
+                    <ul class="mt-2 mb-3">
+                        {% for val in data.forecast['values'] %}
+                            <li class="text-base text-violet-800 font-bold">{{ val }}</li>
+                        {% endfor %}
+                    </ul>
+                {% else %}
+                    <span class="text-gray-400">Недостаточно данных для прогноза</span>
+                {% endif %}
+                <div class="mt-1 text-gray-700">Максимальный риск: <b>{{data.forecast.risk_service}}</b></div>
+                <div class="text-gray-700">Рекомендуемые дни для обслуживания: <b>{{data.forecast.best_days}}</b></div>
+            </div>
+        </div>
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <h3 class="font-semibold mb-2 text-lg">Ответственные</h3>
+            <ul>
+                {% for r in data.responsibles %}
+                    <li class="mb-1"><span class="text-indigo-700 font-semibold">{{r.name}}:</span> <b>{{r.count}} инц.</b></li>
+                {% endfor %}
+            </ul>
+        </div>
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <h3 class="font-semibold mb-2 text-lg">Рекомендации</h3>
+            <ul>
+                {% for rec in data.recommendations %}
+                    <li class="flex items-start mb-2">
+                        <span class="text-green-500 text-2xl mr-3 mt-1 leading-none">✔️</span>
+                        <span class="text-base"><span style="font-weight:600;">{{ rec | safe }}</span></span>
+                    </li>
+                {% endfor %}
+            </ul>
+        </div>
+    </div>
 
-        // Hover по summary: временная подсветка
-        document.querySelectorAll('.relation-item summary').forEach(summary=>{
-          const det   = summary.parentElement;
-          const codes = det.dataset.incs.split(',');
-          summary.addEventListener('mouseenter', ()=>{
-            if(pinnedCodes.length===0) highlightSummary(codes);
-          });
-          summary.addEventListener('mouseleave', ()=>{
-            if(pinnedCodes.length===0) clearHighlights();
-          });
-          // Клик по summary: закрепляет подсветку блока (all relations)
-          summary.addEventListener('click', e=>{
-            // не отменяем раскрытие — <details> сделает это автоматически
-            pinnedCodes = codes;          // сохраняем закреплённые инциденты
-            highlightSummary(codes);      // подсвечиваем весь блок
-          });
-        });
-
-        // Hover и click по бейджам-инцидентам
-        document.querySelectorAll('.incident-badge').forEach(badge=>{
-          const code = badge.dataset.inc;
-          badge.addEventListener('mouseenter', ()=>{
-            if(pinnedCodes.length===0) highlightSummary([code]);
-          });
-          badge.addEventListener('mouseleave', ()=>{
-            if(pinnedCodes.length===0) clearHighlights();
-          });
-          badge.addEventListener('click', ()=>{
-            pinnedCodes = [code];
-            highlightSummary([code]);
-          });
-        });
-      </script>
+    <!-- Таблица с пагинацией -->
+    <div class="bg-white rounded-lg shadow-md p-6 mb-8">
+        <div class="flex justify-between items-center mb-2">
+            <h2 class="text-xl font-semibold text-gray-800">Детализированные данные</h2>
+            <a href="{{ url_for('export_csv') }}" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">Экспорт в CSV</a>
+        </div>
+        <div class="text-sm text-gray-500 mb-2">
+            Здесь вы видите все инциденты, попавшие под выбранные фильтры. Навигация снизу.
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead>
+                    <tr>
+                        <th class="px-3 py-2 text-left text-xs text-gray-600">Дата</th>
+                        <th class="px-3 py-2 text-left text-xs text-gray-600">Сервис</th>
+                        <th class="px-3 py-2 text-left text-xs text-gray-600">Причина</th>
+                        <th class="px-3 py-2 text-left text-xs text-gray-600">Ответственный</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in data.table %}
+                        <tr class="hover:bg-gray-50">
+                            <td class="px-3 py-2 text-sm">{{row.date}}</td>
+                            <td class="px-3 py-2 text-sm font-bold">{{row.service}}</td>
+                            <td class="px-3 py-2 text-sm">{{row.reason}}</td>
+                            <td class="px-3 py-2 text-sm">{{row.responsible}}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <!-- Компактная пагинация с “...” -->
+        <div class="flex justify-center mt-2">
+            {% if data.total_pages > 1 %}
+                <nav class="inline-flex -space-x-px">
+                    <a href="?{{ request.query_string.decode('utf-8')|replace('page=' ~ data.page, 'page=' ~ (data.page-1)) if data.page > 1 else '#' }}" class="px-3 py-2 border rounded-l-lg {{ 'bg-gray-200 text-gray-500 cursor-not-allowed' if data.page==1 else 'bg-white text-blue-700 hover:bg-blue-50' }}" {% if data.page==1 %}tabindex="-1"{% endif %}>&laquo;</a>
+                    {% for p in data.page_list %}
+                        {% if p == "..." %}
+                            <span class="px-3 py-2 border bg-white text-gray-400">…</span>
+                        {% elif p == data.page %}
+                            <span class="px-3 py-2 border bg-blue-600 text-white font-bold">{{p}}</span>
+                        {% else %}
+                            <a href="?{{ request.query_string.decode('utf-8')|replace('page=' ~ data.page, 'page=' ~ p) if 'page=' in request.query_string.decode('utf-8') else (request.query_string.decode('utf-8') ~ '&page=' ~ p) }}" class="px-3 py-2 border bg-white text-blue-700 hover:bg-blue-50">{{p}}</a>
+                        {% endif %}
+                    {% endfor %}
+                    <a href="?{{ request.query_string.decode('utf-8')|replace('page=' ~ data.page, 'page=' ~ (data.page+1)) if data.page < data.total_pages else '#' }}" class="px-3 py-2 border rounded-r-lg {{ 'bg-gray-200 text-gray-500 cursor-not-allowed' if data.page==data.total_pages else 'bg-white text-blue-700 hover:bg-blue-50' }}" {% if data.page==data.total_pages %}tabindex="-1"{% endif %}>&raquo;</a>
+                </nav>
+                <span class="ml-3 text-gray-400 text-xs">Страница {{data.page}} из {{data.total_pages}}, всего {{data.total_rows}} строк</span>
+            {% endif %}
+        </div>
+    </div>
     {% endif %}
-  </main>
+</div>
+
+<!-- Chart.js -->
+{% if data %}
+<script>
+    const chartData = {{data.chart|tojson}};
+    new Chart(document.getElementById('incidents-chart').getContext('2d'), {
+        type: 'line',
+        data: {
+            labels: chartData.labels,
+            datasets: [
+                {
+                    label: 'Количество инцидентов',
+                    data: chartData.count,
+                    borderColor: '#6366f1',
+                    backgroundColor: 'rgba(99,102,241,0.08)',
+                    borderWidth: 2,
+                    pointBackgroundColor: '#6366f1',
+                    pointRadius: 4,
+                    fill: true,
+                    tension: 0.25
+                },
+                {
+                    label: 'Прогноз',
+                    data: chartData.forecast,
+                    borderColor: '#ff8000',
+                    backgroundColor: 'rgba(255,180,50,0.12)',
+                    borderDash: [8,5],
+                    pointRadius: 5,
+                    fill: false,
+                    tension: 0.25
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: {display: true, position: 'top'},
+                title: {display: true, text: 'Динамика инцидентов и прогноз'}
+            },
+            scales: {
+                y: { beginAtZero: true, title: {display:true,text:'Количество инцидентов'} },
+                x: { title: {display:true,text:'Период'} }
+            }
+        }
+    });
+    const servicesPieData = {{data.services_pie|tojson}};
+    new Chart(document.getElementById('services-pie').getContext('2d'), {
+        type: 'pie',
+        data: {
+            labels: servicesPieData.labels,
+            datasets: [{
+                data: servicesPieData.values,
+                backgroundColor: ['#6366f1', '#818cf8', '#a5b4fc', '#c7d2fe', '#e0e7ff'],
+            }]
+        }
+    });
+    const reasonsBar = {{data.reasons_bar|tojson}};
+    new Chart(document.getElementById('reasons-bar').getContext('2d'), {
+        type: 'bar',
+        data: {
+            labels: reasonsBar.labels,
+            datasets: [{
+                label: 'Количество инцидентов',
+                data: reasonsBar.values,
+                backgroundColor: '#818cf8'
+            }]
+        }
+    });
+</script>
+{% endif %}
 </body>
 </html>
